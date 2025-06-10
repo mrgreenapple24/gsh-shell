@@ -1,11 +1,53 @@
 #include "gsh.h"
 
+int gsh_pipe(char **left, char **right) {
+    int pipefd[2];
+    pid_t pid1, pid2;
+
+    // fd[0] will be fd for read end of the pipe
+    // fd[1] will be fd for write end of the pipe
+
+    if (pipe(pipefd) == -1) { // success ? 0 : -1
+        perror("gsh: pipe");
+        return 1;
+    }
+
+    pid1 = fork();
+    if (!pid1) {
+        // first child: left command
+        dup2(pipefd[1], STDOUT_FILENO); // redirect stdout to write end
+        close(pipefd[0]); // close unused read end
+        close(pipefd[1]); // we've already copied this file to stdout
+        execvp(left[0], left);
+        perror("gsh");
+        exit(EXIT_FAILURE);
+    }
+
+    pid2 = fork();
+    if (!pid2) {
+        // Second child: right command
+        dup2(pipefd[0], STDIN_FILENO); // redirect stdin to read end
+        close(pipefd[1]); // close unused write end
+        close(pipefd[0]);
+        execvp(right[0], right);
+        perror("gsh");
+        exit(EXIT_FAILURE);
+    }
+
+    // parent
+    close(pipefd[0]);
+    close(pipefd[1]);
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+
+    return 1;
+}
 int gsh_launch(char **args) {
     __pid_t pid, wpid;
     int status;
 
     pid = fork(); // creates a new child process
-    // returns pid of child process or parent process or 0 to child process
+    // returns pid of child process to parent process or 0 to child process
     if (pid == 0) { 
         // child process
         if (execvp(args[0],args) == -1) {
@@ -68,7 +110,16 @@ int gsh_exec(char **args) {
         return 1; // empty command
     }
 
-    for (int i = 0; i < num(); i++) {
+    int i = 0;
+    while (args[i] != NULL) { // for piping
+        if (strcmp(args[i], "|") == 0) { // detects if a pipe exists in a command
+            args[i] = NULL;
+            return gsh_pipe(args, &args[i+1]);
+        }
+        i++;
+    }
+
+    for (int i = 0; i < num(); i++) { // for builtin commands
         if (strcmp(args[0], str[i]) == 0) {
             return (*func[i])(args);
         }
